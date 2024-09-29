@@ -20,13 +20,6 @@ const io = socketIo(server, {
     },
 });
 
-io.on('connection', (socket) => {
-    console.log(`A client connected: ${socket.id}`);
-
-    socket.on('disconnect', () => {
-        console.log(`Client disconnected: ${socket.id}`);
-    });
-});
 
 app.use(cors());
 app.set('io', io); // Set the io object for access in other routes if needed
@@ -37,17 +30,33 @@ app.use(express.json());
 connectDB();
 
 // Socket.io connection check
+const activeJobs = {}; // Store active jobs by socketId
 io.on('connection', (socket) => {
-    console.log('A client connected:', socket.id);
+    const socketId = socket.id;
 
-    // Optional: You can send a message to the client on connection
-    socket.emit('welcome', 'Hello, you are connected to the socket server!');
-
-    // Log disconnection events
+    console.log(`Client connected: ${socketId}`);
+    app.set('currentSocketId', socketId);
     socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
+        console.log(`Client disconnected: ${socketId}`);
+        if (activeJobs[socketId]) {
+            // Cancel or clean up all jobs for the disconnected client
+            console.log(`Cancelling jobs for ${socketId}`);
+            cancelJobsForClient(socketId); // Implement the cleanup logic here
+            delete activeJobs[socketId]; // Remove job references
+        }
     });
 });
+
+// Function to cancel jobs for a client (you need to define the cancellation logic)
+const cancelJobsForClient = (socketId) => {
+    if (activeJobs[socketId]) {
+        activeJobs[socketId].forEach((jobUrl) => {
+            console.log(`Job for ${jobUrl} cancelled for client ${socketId}`);
+            // Implement specific logic to stop or cancel the job here
+            // You might need to clear timers, stop processing, etc.
+        });
+    }
+};
 
 // Routes
 app.use('/api/sitemap', sitemapRoute);
@@ -61,3 +70,5 @@ server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
     console.log(`Socket.io server is running as well.`);
 });
+
+module.exports = { activeJobs }

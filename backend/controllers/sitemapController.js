@@ -105,7 +105,6 @@ const fetchSitemap = async (req, res, next) => {
 };
 
 // Function to parse sitemaps and extract URLs along with their titles
-// Function to parse sitemaps and extract URLs along with their titles
 const parseSitemaps = async (sitemapUrls, baseUrl) => {
     const groupedUrls = {}; // This will be filled dynamically
     const titleFetchQueue = []; // Queue to manage concurrent title fetches
@@ -116,17 +115,15 @@ const parseSitemaps = async (sitemapUrls, baseUrl) => {
             const response = await axios.get(sitemap.url);
             const $ = cheerio.load(response.data, { xmlMode: true });
 
-            // Extract URLs from the sitemap
-            $('url loc').each((i, el) => {
-                const url = $(el).text();
-                const lastModified = $(el).next('url lastmod').text();
+            const urls = $('url loc');
+            for (let i = 0; i < urls.length; i++) {
+                const url = $(urls[i]).text();
+                const lastModified = $(urls[i]).next('url lastmod').text();
 
-                // Create a promise for fetching title and add to the queue
+                // Fetch title asynchronously and add the promise to the queue
                 const titleFetchPromise = fetchTitle(url).then((title) => {
-                    // Determine the category based on the URL path
                     const category = getCategory(url, baseUrl);
 
-                    // Initialize the category array if it doesn't exist
                     if (!groupedUrls[category]) {
                         groupedUrls[category] = [];
                     }
@@ -136,53 +133,60 @@ const parseSitemaps = async (sitemapUrls, baseUrl) => {
 
                 titleFetchQueue.push(titleFetchPromise);
 
-                // If the queue reaches the max limit, wait for the current batch to finish
                 if (titleFetchQueue.length >= maxConcurrentFetches) {
-                    return Promise.all(titleFetchQueue).then(() => {
-                        titleFetchQueue.length = 0; // Clear the queue
-                    });
+                    await Promise.all(titleFetchQueue); // Wait for the batch to complete
+                    titleFetchQueue.length = 0; // Clear the queue after batch processing
                 }
-            });
+            }
 
-            // For sitemap indexes, extract nested sitemaps
-            $('sitemap loc').each((i, el) => {
-                const nestedSitemapUrl = $(el).text();
-                groupedUrls.others = groupedUrls.others || []; // Initialize if it doesn't exist
-                groupedUrls.others.push({ url: nestedSitemapUrl, title: null, lastModified: null }); // No title for nested sitemaps
-            });
+            const nestedSitemaps = $('sitemap loc');
+            for (let i = 0; i < nestedSitemaps.length; i++) {
+                const nestedSitemapUrl = $(nestedSitemaps[i]).text();
+                groupedUrls.others = groupedUrls.others || [];
+                groupedUrls.others.push({ url: nestedSitemapUrl, title: null, lastModified: null });
+            }
         } catch (error) {
             console.warn(`Error fetching or parsing sitemap at ${sitemap.url}:`, error.message);
         }
     }
 
-    // Wait for any remaining title fetch promises to resolve
+    // Ensure all remaining title fetches are awaited
     await Promise.all(titleFetchQueue);
+
     return groupedUrls;
 };
+
 
 // Function to get the category of a URL based on its path
 const getCategory = (url, baseUrl) => {
     const relativeUrl = url.replace(baseUrl, ''); // Get the path relative to the base URL
-
-    if (relativeUrl.includes('/event/')) {
-        return 'events';
-    } else if (relativeUrl.includes('/case-studies/')) {
-        return 'caseStudies';
-    } else if (relativeUrl.includes('/resource/')) {
-        return 'resources';
-    } else if (relativeUrl.includes('/partner/')) {
-        return 'partners';
-    } else if (/\d{4}\/\d{2}\/\d{2}/.test(relativeUrl)) {
-        return 'posts';
-    } else {
-        return 'others';
-    }
+    const pathParts = relativeUrl.split('/').filter(Boolean); // Split path and filter out empty parts
+    const category = pathParts[0] || 'others'; // Use the first segment after the base URL as the category
+    return category;
 };
 
 // Function to fetch the title of a given URL
 // Function to fetch the title of a given URL with retry logic
 const fetchTitle = async (url, retries = 3) => {
-    return "TITLe";
+    const fetchWithRetry = async (attempt) => {
+        try {
+            const response = await axios.get(url);
+            const $ = cheerio.load(response.data);
+            return $('title').text();
+        } catch (error) {
+            if (error.response && error.response.status === 429 && attempt < retries) {
+                const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff
+                console.warn(`Rate limited for ${url}. Retrying in ${waitTime / 1000} seconds...`);
+                await sleep(waitTime);
+                return fetchWithRetry(attempt + 1); // Retry the request
+            } else {
+                console.warn(`Error fetching title for ${url}:`, error.message);
+                return null; // Return null if not recoverable
+            }
+        }
+    };
+
+    return fetchWithRetry(1);
 };
 
 
@@ -190,14 +194,31 @@ const startPageSpeedJob = (groupedSitemaps, io) => {
     const allUrls = Object.values(groupedSitemaps).flat(); // Flatten the grouped URLs
 
     allUrls.forEach(async (urlObj) => {
-        const pageSpeedData = await fetchPageSpeedInsights(urlObj.url, ['performance', 'seo', 'accessibility'], 'mobile');
-        // Emit real-time updates to the frontend via socket.io
-        io.emit('pagespeed_report', {
-            url: urlObj.url,
-            pageSpeedData,
-        });
+        const maxRetries = 5;
+        let pageSpeedData = null;
+
+        // Retry logic with a max number of retries
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            pageSpeedData = await fetchPageSpeedInsights(urlObj.url, maxRetries);
+
+            if (pageSpeedData && (pageSpeedData.desktop.performance || pageSpeedData.mobile.performance)) {
+                // Emit the real-time update only if the performance data is available
+                io.emit('pagespeed_report', {
+                    url: urlObj.url,
+                    pageSpeedData,
+                });
+                break; // Stop retrying once we have valid data
+            } else {
+                console.log(`Retrying PageSpeed Insights for ${urlObj.url} (attempt ${attempt})...`);
+            }
+
+            if (attempt === maxRetries) {
+                console.warn(`Failed to retrieve PageSpeed data after ${maxRetries} attempts for ${urlObj.url}`);
+            }
+        }
     });
 };
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const fetchPageSpeedInsights = async (url, retries = 5) => {
@@ -227,27 +248,33 @@ const fetchPageSpeedInsights = async (url, retries = 5) => {
     const desktopScore = await fetchWithRetry(apiUrlDesktop);
     const mobileScore = await fetchWithRetry(apiUrlMobile);
 
+    // If both desktop and mobile scores are null, return null
+    if (!desktopScore && !mobileScore) {
+        return null;
+    }
+
     // Create performance objects for desktop and mobile
     const performanceObjectDesktop = {
         performance: desktopScore?.lighthouseResult?.categories?.performance?.score,
         accessibility: desktopScore?.lighthouseResult?.categories?.accessibility?.score,
         best_practices: desktopScore?.lighthouseResult?.categories?.['best-practices']?.score,
         seo: desktopScore?.lighthouseResult?.categories?.seo?.score,
-    }
-
+    };
 
     const performanceObjectMobile = {
         performance: mobileScore?.lighthouseResult?.categories?.performance?.score,
         accessibility: mobileScore?.lighthouseResult?.categories?.accessibility?.score,
         best_practices: mobileScore?.lighthouseResult?.categories?.['best-practices']?.score,
         seo: mobileScore?.lighthouseResult?.categories?.seo?.score,
-    }
+    };
 
     // Dynamic analysis URL for the PageSpeed report
     const pagespeedAnalysisUrl = `https://developers.google.com/speed/pagespeed/insights/?url=${encodeURIComponent(url)}`;
 
-    console.log(performanceObjectDesktop, performanceObjectMobile)
+    console.log(performanceObjectDesktop, performanceObjectMobile);
+
     return {
+        site_url: url,
         desktop: performanceObjectDesktop,
         mobile: performanceObjectMobile,
         analysisUrl: pagespeedAnalysisUrl,

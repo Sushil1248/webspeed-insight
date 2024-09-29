@@ -14,7 +14,7 @@ const fetchSitemaps = async (url) => {
 };
 
 const UrlInput = () => {
-    const [url, setUrl] = useState('');
+    const [url, setUrl] = useState('https://rooftek.com');
     const [error, setError] = useState(null);
 
     const { mutate: fetchSitemapsMutation, data: sitemaps, isPending: isLoading } = useMutation({

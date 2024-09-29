@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import UrlInput from './components/UrlInput ';
 import UrlSitemap from './components/SitemapList';
+import ScoreTable from './components/ScoreTable';
 
 const App = () => {
   const [sitemapData, setSitemapData] = useState([]);
@@ -17,6 +18,7 @@ const App = () => {
   return (
     <div className="min-h-screen ">
       <UrlInput onSearch={handleSearch} />
+      {/* <ScoreTable data={[]} /> */}
     </div>
   );
 };
