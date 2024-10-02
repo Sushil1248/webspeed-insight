@@ -1,8 +1,10 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { Response } = require('../models/response');
+const { Worker } = require('worker_threads');
 
-// Function to fetch sitemap URLs from multiple sources
+// Function to fetch sitemap URLs from multiple sources with batching
+// Function to fetch sitemap URLs from multiple sources with batching
 const fetchSitemap = async (req, res, next) => {
     const { url } = req.body;
     const io = req.app.get('io'); // Access the io instance
@@ -27,7 +29,11 @@ const fetchSitemap = async (req, res, next) => {
             });
 
             if (sitemapUrls.length > 0) {
-                const groupedSitemaps = await parseSitemaps(sitemapUrls, url);
+                // Send partial response to the frontend
+                io.emit('sitemap_partial', { sitemaps: sitemapUrls });
+                
+                // Batch sitemap fetching and processing
+                const groupedSitemaps = await parseSitemapsInBatches(sitemapUrls, url);
                 startPageSpeedJob(groupedSitemaps, io);
                 return res.status(200).json(new Response(200, 'Sitemap URLs fetched successfully', { sitemaps: groupedSitemaps }));
             }
@@ -39,7 +45,7 @@ const fetchSitemap = async (req, res, next) => {
         const defaultSitemapUrl = `${url}/sitemap.xml`;
         try {
             const defaultSitemapResponse = await axios.get(defaultSitemapUrl);
-            sitemapUrls.push({ url: defaultSitemapUrl, lastModified: null }); // No last modified date for this check
+            sitemapUrls.push({ url: defaultSitemapUrl, lastModified: null });
         } catch (err) {
             console.warn('Default sitemap.xml not found.');
         }
@@ -54,7 +60,7 @@ const fetchSitemap = async (req, res, next) => {
             if (sitemapMatches) {
                 sitemapMatches.forEach((match) => {
                     const sitemapUrl = match.split(':')[1].trim();
-                    sitemapUrls.push({ url: sitemapUrl, lastModified: null }); // No last modified date for this check
+                    sitemapUrls.push({ url: sitemapUrl, lastModified: null });
                 });
             }
         } catch (err) {
@@ -79,23 +85,21 @@ const fetchSitemap = async (req, res, next) => {
                     return next(new Response(404, 'No sitemap URLs found'));
                 }
 
-                // Include found URLs from scraping in the final response
                 foundUrls.forEach((foundUrl) => {
-                    sitemapUrls.push({ url: foundUrl, lastModified: null }); // No last modified date for scraped URLs
+                    sitemapUrls.push({ url: foundUrl, lastModified: null });
                 });
             } catch (error) {
                 console.warn('Error scraping the main page:', error.message);
             }
         }
 
-        // Parse additional URLs from the gathered sitemaps
-        const groupedSitemaps = await parseSitemaps(sitemapUrls, url);
+        // Batch sitemap fetching and processing
+        const groupedSitemaps = await parseSitemapsInBatches(sitemapUrls, url);
 
         if (Object.keys(groupedSitemaps).length === 0) {
             return next(new Response(404, 'No sitemap URLs found'));
         }
 
-        // Final response with all gathered sitemap URLs
         startPageSpeedJob(groupedSitemaps, io);
         res.status(200).json(new Response(200, 'Sitemap URLs fetched successfully', { sitemaps: groupedSitemaps }));
 
@@ -104,58 +108,57 @@ const fetchSitemap = async (req, res, next) => {
     }
 };
 
-// Function to parse sitemaps and extract URLs along with their titles
-const parseSitemaps = async (sitemapUrls, baseUrl) => {
-    const groupedUrls = {}; // This will be filled dynamically
-    const titleFetchQueue = []; // Queue to manage concurrent title fetches
-    const maxConcurrentFetches = 5; // Limit concurrent title fetches
+// Function to parse sitemaps and extract URLs along with their titles with batching
+const parseSitemapsInBatches = async (sitemapUrls, baseUrl, batchSize = 5) => {
+    const groupedUrls = {};
+    const titleFetchQueue = [];
 
-    for (const sitemap of sitemapUrls) {
-        try {
-            const response = await axios.get(sitemap.url);
-            const $ = cheerio.load(response.data, { xmlMode: true });
+    // Helper to process sitemaps in batches
+    const processBatch = async (batch) => {
+        await Promise.all(batch.map(async (sitemap) => {
+            try {
+                const response = await axios.get(sitemap.url);
+                const $ = cheerio.load(response.data, { xmlMode: true });
 
-            const urls = $('url loc');
-            for (let i = 0; i < urls.length; i++) {
-                const url = $(urls[i]).text();
-                const lastModified = $(urls[i]).next('url lastmod').text();
+                const urls = $('url loc');
+                for (let i = 0; i < urls.length; i++) {
+                    const url = $(urls[i]).text();
+                    const lastModified = $(urls[i]).next('url lastmod').text();
 
-                // Fetch title asynchronously and add the promise to the queue
-                const titleFetchPromise = fetchTitle(url).then((title) => {
-                    const category = getCategory(url, baseUrl);
-
-                    if (!groupedUrls[category]) {
-                        groupedUrls[category] = [];
-                    }
-
-                    groupedUrls[category].push({ url, title, lastModified });
-                });
-
-                titleFetchQueue.push(titleFetchPromise);
-
-                if (titleFetchQueue.length >= maxConcurrentFetches) {
-                    await Promise.all(titleFetchQueue); // Wait for the batch to complete
-                    titleFetchQueue.length = 0; // Clear the queue after batch processing
+                    const titleFetchPromise = fetchTitle(url).then((title) => {
+                        const category = getCategory(url, baseUrl);
+                        if (!groupedUrls[category]) {
+                            groupedUrls[category] = [];
+                        }
+                        groupedUrls[category].push({ url, title, lastModified });
+                    });
+                    titleFetchQueue.push(titleFetchPromise);
                 }
-            }
 
-            const nestedSitemaps = $('sitemap loc');
-            for (let i = 0; i < nestedSitemaps.length; i++) {
-                const nestedSitemapUrl = $(nestedSitemaps[i]).text();
-                groupedUrls.others = groupedUrls.others || [];
-                groupedUrls.others.push({ url: nestedSitemapUrl, title: null, lastModified: null });
+                const nestedSitemaps = $('sitemap loc');
+                for (let i = 0; i < nestedSitemaps.length; i++) {
+                    const nestedSitemapUrl = $(nestedSitemaps[i]).text();
+                    groupedUrls.others = groupedUrls.others || [];
+                    groupedUrls.others.push({ url: nestedSitemapUrl, title: null, lastModified: null });
+                }
+            } catch (error) {
+                console.warn(`Error fetching or parsing sitemap at ${sitemap.url}:`, error.message);
             }
-        } catch (error) {
-            console.warn(`Error fetching or parsing sitemap at ${sitemap.url}:`, error.message);
-        }
+        }));
+
+        // Wait for title fetches in this batch
+        await Promise.all(titleFetchQueue);
+        titleFetchQueue.length = 0;
+    };
+
+    // Process sitemaps in batches
+    for (let i = 0; i < sitemapUrls.length; i += batchSize) {
+        const batch = sitemapUrls.slice(i, i + batchSize);
+        await processBatch(batch); // Process each batch
     }
-
-    // Ensure all remaining title fetches are awaited
-    await Promise.all(titleFetchQueue);
 
     return groupedUrls;
 };
-
 
 // Function to get the category of a URL based on its path
 const getCategory = (url, baseUrl) => {
@@ -166,7 +169,7 @@ const getCategory = (url, baseUrl) => {
 };
 
 // Function to fetch the title of a given URL
-// Function to fetch the title of a given URL with retry logic
+// Function to fetch title with retry logic and exponential backoff
 const fetchTitle = async (url, retries = 3) => {
     const fetchWithRetry = async (attempt) => {
         try {
@@ -177,11 +180,11 @@ const fetchTitle = async (url, retries = 3) => {
             if (error.response && error.response.status === 429 && attempt < retries) {
                 const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff
                 console.warn(`Rate limited for ${url}. Retrying in ${waitTime / 1000} seconds...`);
-                await sleep(waitTime);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
                 return fetchWithRetry(attempt + 1); // Retry the request
             } else {
                 console.warn(`Error fetching title for ${url}:`, error.message);
-                return null; // Return null if not recoverable
+                return 'Untitled'; // Return default title if not recoverable
             }
         }
     };
@@ -199,7 +202,7 @@ const startPageSpeedJob = (groupedSitemaps, io) => {
 
         // Retry logic with a max number of retries
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            pageSpeedData = await fetchPageSpeedInsights(urlObj.url, maxRetries);
+            pageSpeedData = await fetchPageSpeedInsightsWithWorker(urlObj.url);
 
             if (pageSpeedData && (pageSpeedData.desktop.performance || pageSpeedData.mobile.performance)) {
                 // Emit the real-time update only if the performance data is available
@@ -280,6 +283,28 @@ const fetchPageSpeedInsights = async (url, retries = 5) => {
         analysisUrl: pagespeedAnalysisUrl,
     };
 };
+
+const fetchPageSpeedInsightsWithWorker = (url) => {
+    return new Promise((resolve, reject) => {
+        const worker = new Worker('./worker/pageSpeedWorker.js');
+        const apiKey = 'AIzaSyCdc_n0FN2yInxObTb5GKat5lY4wBK7IpM'; // Replace with your actual API key
+
+        worker.onmessage = (event) => {
+            const { desktopScore, mobileScore } = event.data;
+            resolve({ desktopScore, mobileScore });
+            worker.terminate(); // Terminate worker once done
+        };
+
+        worker.onerror = (error) => {
+            console.error('Worker error:', error);
+            reject(error);
+            worker.terminate(); // Terminate worker on error
+        };
+
+        worker.postMessage({ url, apiKey });
+    });
+};
+
 
 
 module.exports = { fetchSitemap };

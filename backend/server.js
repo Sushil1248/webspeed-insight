@@ -27,7 +27,7 @@ app.set('io', io); // Set the io object for access in other routes if needed
 app.use(express.json());
 
 // Connect to MongoDB
-connectDB();
+// connectDB();
 
 // Socket.io connection check
 const activeJobs = {}; // Store active jobs by socketId

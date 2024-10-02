@@ -10,14 +10,17 @@ const getColor = (score) => {
 };
 
 const PageSpeedReport = ({ reportData }) => {
-    console.log(reportData)
+    console.log(reportData?.data?.pageSpeedData, "TEST")
     if (!reportData) {
         return <Typography variant="h6">No PageSpeed report data available.</Typography>;
     }
-
-    const url = reportData?.url;
-    const desktopData = reportData?.desktop;
-    const mobileData = reportData?.mobile;
+    
+    const curentPageSpeedData = reportData?.data?.pageSpeedData;
+    console.log(curentPageSpeedData, "CYs")
+    const url = curentPageSpeedData?.site_url;
+    const analysisUrl = curentPageSpeedData?.analysisUrl;
+    const desktopData = curentPageSpeedData?.desktop;
+    const mobileData = curentPageSpeedData?.mobile;
 
     const renderSinglePieChart = (data, title, description) => {
         const value = data[0]?.value || 0;
@@ -58,7 +61,7 @@ const PageSpeedReport = ({ reportData }) => {
     return (
         <Grid elevation={3} sx={{ padding: 2, maxWidth: '95%', margin: '0 auto' }}> {/* Reduced overall padding */}
             <Typography variant="p" gutterBottom sx={{ textAlign: 'center' }}>Page Url: {url}</Typography>
-            <Box mb={2}><a href={reportData?.analysisUrl} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', color: '#1976d2' }}>
+            <Box mb={2}><a href={analysisUrl} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', color: '#1976d2' }}>
                 See Full Page Analysis Here
             </a>
             </Box>

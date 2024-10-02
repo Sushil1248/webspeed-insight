@@ -2,3 +2,8 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.hero-banner {
+    background: rgb(15, 158, 152);
+    background: linear-gradient(90deg, rgba(15, 158, 152, 1) 0%, rgba(38, 102, 41, 1) 100%);
+}

@@ -39,7 +39,7 @@ const UrlInput = () => {
 
     return (
         <Box
-            className="w-full flex justify-center items-center py-8 rounded-lg"
+            className="w-full flex justify-center items-center py-8 rounded-lg relative top-[-130px]"
             sx={{
                 display: 'flex',
                 justifyContent: 'center',
@@ -52,14 +52,22 @@ const UrlInput = () => {
                 gap: 3,
             }}
         >
-            <h2 className="text-3xl font-semibold ">Enter a URL to Search</h2>
+            <h2 className="text-3xl font-semibold text-white ">Enter a URL to Search</h2>
             <TextField
-                className="w-full"
+                className="w-full text-white"
                 label="Your Website Url"
                 variant="outlined"
                 value={url}
                 onChange={handleInputChange}
                 size="medium"
+                InputLabelProps={{
+                    style: {
+                        color: 'black',
+                        position: 'absolute',
+                        right:0,
+                        fontWeight: 600
+                    },
+                }}
                 InputProps={{
                     style: {
                         backgroundColor: '#fff',
@@ -78,13 +86,13 @@ const UrlInput = () => {
                 startIcon={<SearchIcon />}
                 disabled={isLoading} // Disable button when loading
                 sx={{
-                    backgroundColor: '#1976d2',
+                    backgroundColor: '#226a31',
                     padding: '12px 24px',
                     fontSize: '16px',
                     textTransform: 'none',
                     borderRadius: '8px',
                     '&:hover': {
-                        backgroundColor: '#125fa1',
+                        backgroundColor: '#109181',
                     },
                     width: '100%',
                     maxWidth: '500px',
